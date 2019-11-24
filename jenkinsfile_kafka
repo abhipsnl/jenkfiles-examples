@@ -1,0 +1,51 @@
+pipeline {
+  environment {
+    registry = ""
+    registryCredential = ''
+    dockerImage = ''
+    ansible_controler_user = ''
+    ansible_controler_ip = ''
+    TARGET_DIR = '/tmp/kafka-temp'
+  }
+  agent any
+  stages {
+    stage('Prepare for kafka deployment') {
+      steps('Copying kafka code on ansible controler'){
+        sshagent(credentials : ['ansible-controler-cred']) {
+        sh '''
+        ssh ${ansible_controler_user}@${ansible_controler_ip} "rm -r /tmp/kafka-temp ; if [ ! -d ${TARGET_DIR} ];then mkdir ${TARGET_DIR}; fi"
+        if [ $? -ne 0 ]; then
+            echo "Faled to create dir"
+            exit 1
+        fi
+        ls -lrt
+        scp -r k8s-deployments ${ansible_controler_user}@${ansible_controler_ip}:${TARGET_DIR}/
+        '''
+        }
+      }
+    }
+    stage('Deploying kafka on OP2'){
+        steps{
+            sshagent(credentials : ['ansible-controler-cred']) {
+            sh '''
+            ssh  ${ansible_controler_user}@${ansible_controler_ip} "cd ${TARGET_DIR}/k8s-deployments/kafka-deployment/; sh ./deploy-kafka.sh -c local -s openebs-jiva-default"
+            '''
+            }
+        }
+    }
+    stage('Verifying kafka deplyment'){
+        steps{
+            sshagent(credentials : ['ansible-controler-cred']) {
+            sh '''
+            sleep 60
+            STATUS=$(ssh  ${ansible_controler_user}@${ansible_controler_ip} "kubectl get pods | grep -i "^kafka" | grep  "Error"")
+            if [ ! -z "${STATUS}" ];then
+                echo "Failed while deplying kafka, please see the logs"
+                exit 1
+            fi    
+            '''
+            }
+        }
+    }
+  }
+}
